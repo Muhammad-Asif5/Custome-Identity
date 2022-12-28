@@ -1,0 +1,321 @@
+dotnet add package Microsoft.EntityFrameworkCore 
+dotnet add package Microsoft.EntityFrameworkCore.Design 
+dotnet add package Npgsql.EntityFrameworkCore.PostgreSQL
+dotnet add package Microsoft.EntityFrameworkCore.Tools
+
+
+namespace ErrorManagement.Models;
+public class Driver
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public int DriverNumber { get; set; }
+    public string Team { get; set; } = "";
+}
+
+
+using ErrorManagement.Models;
+using Microsoft.EntityFrameworkCore;
+
+namespace ErrorManagement.Data;
+
+public class AppDbContext: DbContext
+{
+    public AppDbContext(DbContextOptions<AppDbContext> options): base(options) {  }
+
+    public DbSet<Driver> Drivers { get; set; }
+}
+
+"ConnectionStrings": {
+    "SampleDbConnection": "User ID =mohamad;Password=12345678;Server=localhost;Port=5432;Database=sampledb; Integrated Security=true;Pooling=true;"
+  }
+
+
+
+builder.Services.AddEntityFrameworkNpgsql().AddDbContext<ApiDbContext>(opt =>
+        opt.UseNpgsql(builder.Configuration.GetConnectionString("SampleDbConnection")));
+
+
+IDriverService.cs
+using ErrorManagement.Models;
+namespace ErrorManagement.Services;
+public interface IDriverService
+{
+    public Task<IEnumerable<Driver>> GetDrivers();
+    public Task<Driver?> GetDriverById(int id);
+    public Task<Driver> AddDriver(Driver Driver);
+    public Task<Driver> UpdateDriver(Driver Driver);
+    public Task<bool> DeleteDriver(int Id);
+}
+
+
+
+DriverService.cs
+using ErrorManagement.Data;
+using ErrorManagement.Models;
+using Microsoft.EntityFrameworkCore;
+
+namespace ErrorManagement.Services;
+
+public class DriverService : IDriverService
+{
+    private readonly AppDbContext _dbContext;
+
+    public DriverService(AppDbContext dbContext)
+    {
+        _dbContext = dbContext;
+    }
+
+    public async Task<IEnumerable<Driver>> GetDrivers()
+    {
+        return  await _dbContext.Drivers.ToListAsync();
+    }
+
+    public async Task<Driver?> GetDriverById(int id)
+    {
+        return await _dbContext.Drivers.FirstOrDefaultAsync(x => x.Id == id);
+    }
+
+    public async Task<Driver> AddDriver(Driver Driver)
+    {
+        var result = _dbContext.Drivers.Add(Driver);
+        await _dbContext.SaveChangesAsync();
+        return result.Entity;
+    }
+
+    public async Task<Driver> UpdateDriver(Driver Driver)
+    {
+        var result = _dbContext.Drivers.Update(Driver);
+        await _dbContext.SaveChangesAsync();
+        return result.Entity;
+    }
+
+    public async Task<bool> DeleteDriver(int Id)
+    {
+        var filteredData = _dbContext.Drivers.FirstOrDefault(x => x.Id == Id);
+        var result = _dbContext.Remove(filteredData);
+        await _dbContext.SaveChangesAsync();
+        return result != null ? true : false;
+    }
+}
+
+
+
+
+builder.Services.AddScoped<IDriverService, DriverService>();
+
+
+
+using ErrorManagement.Models;
+using ErrorManagement.Services;
+using Microsoft.AspNetCore.Mvc;
+
+namespace ErrorManagement.Controllers;
+
+[ApiController]
+[Route("[controller]")]
+public class DriversController : ControllerBase
+{
+    private readonly ILogger<WeatherForecastController> _logger;
+    private readonly IDriverService _driverServices;
+
+    public DriversController(
+        ILogger<WeatherForecastController> logger,
+        IDriverService driverServices)
+    {
+        _logger = logger;
+        _driverServices = driverServices;
+    }
+
+    [HttpGet("driverlist")]
+    public async Task<IEnumerable<Driver>> DriverList()
+    {
+        var driverList = await _driverServices.GetDrivers();
+        return driverList;
+    }
+
+    [HttpGet("getdriverbyid")]
+    public async Task<IActionResult> GetDriverById(int Id)
+    {
+        _logger.LogInformation($"Fetch Driver with ID: {Id} from the database");
+        var driver = await _driverServices.GetDriverById(Id);
+        if (driver == null)
+        {
+            //throw new Notfound($"Driver ID {Id} not found.");
+            return NotFound();
+        }
+        _logger.LogInformation($"Returning driver with ID: {driver.Id}.");
+        return Ok(driver) ;
+    }
+
+    [HttpPost("adddriver")]
+    public async Task<IActionResult> AddDriver(Driver driver)
+    {
+        var result = await _driverServices.AddDriver(driver);
+        return Ok(result);
+    }
+
+    [HttpPut("updatedriver")]
+    public async Task<IActionResult> UpdateDriver(Driver driver)
+    {
+        var result = await _driverServices.UpdateDriver(driver);
+        return Ok(result);
+    }
+
+    [HttpDelete("deletedriver")]
+    public async Task<bool> DeleteDriver(int Id)
+    {
+        return await _driverServices.DeleteDriver(Id);
+    }
+}
+
+
+
+
+namespace ErrorManagement.Exceptions;
+
+public class BadRequestException : Exception
+{
+    public BadRequestException(string message) : base(message)
+    { }
+}
+
+
+
+namespace ErrorManagement.Exceptions;
+
+public class KeyNotFoundException : Exception
+{
+    public KeyNotFoundException(string message) : base(message)
+    { }
+}
+
+
+
+namespace ErrorManagement.Exceptions;
+
+public class NotFoundException : Exception
+{
+    public NotFoundException(string message) : base(message)
+    { }
+}
+
+
+namespace ErrorManagement.Exceptions;
+
+public class NotImplementedException : Exception
+{
+    public NotImplementedException(string message) : base(message)
+    { }
+}
+
+
+
+namespace ErrorManagement.Exceptions;
+
+public class UnauthorizedAccessException : Exception
+{
+    public UnauthorizedAccessException(string message) : base(message)
+    { }
+}
+
+
+GlobalErrorHandlingMiddleware.cs
+using System.Net;
+using System.Text.Json;
+using ErrorManagement.Exceptions;
+
+using KeyNotFoundException = ErrorManagement.Exceptions.KeyNotFoundException;
+using NotImplementedException = ErrorManagement.Exceptions.NotImplementedException;
+using UnauthorizedAccessException = ErrorManagement.Exceptions.UnauthorizedAccessException;
+
+namespace ErrorManagement.Configurations;
+
+public class GlobalErrorHandlingMiddleware
+{
+    private readonly RequestDelegate _next;
+
+    public GlobalErrorHandlingMiddleware(RequestDelegate next)
+    {
+        _next = next;
+    }
+
+    public async Task Invoke(HttpContext context)
+    {
+        try
+        {
+            await _next(context);
+        }
+        catch (Exception ex)
+        {
+            await HandleExceptionAsync(context, ex);
+        }
+    }
+
+    private static Task HandleExceptionAsync(HttpContext context, Exception exception)
+    {
+        HttpStatusCode status;
+        var stackTrace = string.Empty;
+        string message;
+
+        var exceptionType = exception.GetType();
+
+        if (exceptionType == typeof(BadRequestException))
+        {
+            message = exception.Message;
+            status = HttpStatusCode.BadRequest;
+            stackTrace = exception.StackTrace;
+        }
+        else if (exceptionType == typeof(NotFoundException))
+        {
+            message = exception.Message;
+            status = HttpStatusCode.NotFound;
+            stackTrace = exception.StackTrace;
+        }
+        else if (exceptionType == typeof(NotImplementedException))
+        {
+            status = HttpStatusCode.NotImplemented;
+            message = exception.Message;
+            stackTrace = exception.StackTrace;
+        }
+        else if (exceptionType == typeof(UnauthorizedAccessException))
+        {
+            status = HttpStatusCode.Unauthorized;
+            message = exception.Message;
+            stackTrace = exception.StackTrace;
+        }
+        else if (exceptionType == typeof(KeyNotFoundException))
+        {
+            status = HttpStatusCode.Unauthorized;
+            message = exception.Message;
+            stackTrace = exception.StackTrace;
+        }
+        else
+        {
+            status = HttpStatusCode.InternalServerError;
+            message = exception.Message;
+            stackTrace = exception.StackTrace;
+        }
+
+        var exceptionResult = JsonSerializer.Serialize(new { error = message, stackTrace });
+        context.Response.ContentType = "application/json";
+        context.Response.StatusCode = (int)status;
+
+        return context.Response.WriteAsync(exceptionResult);
+    }
+}
+
+
+
+namespace ErrorManagement.Configurations;
+
+public static class ApplicationBuilderExtensions
+{
+    public static IApplicationBuilder AddGlobalErrorHandler(this IApplicationBuilder applicationBuilder)
+        => applicationBuilder.UseMiddleware<GlobalErrorHandlingMiddleware>();
+}
+
+
+
+app.AddGlobalErrorHandler();
+
